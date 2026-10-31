@@ -1,0 +1,334 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>ESP8266 IoT Environment Monitor</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #f1f5f9;
+            color: #1e293b;
+        }
+
+        header {
+            background: #0f172a;
+            color: white;
+            padding: 25px 6%;
+        }
+
+        header h1 {
+            font-size: 25px;
+        }
+
+        header p {
+            color: #cbd5e1;
+            margin-top: 8px;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 35px auto;
+            padding: 0 20px;
+        }
+
+        .status {
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .online {
+            color: #16a34a;
+            font-weight: bold;
+        }
+
+        .offline {
+            color: #dc2626;
+            font-weight: bold;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px #0000000d;
+        }
+
+        .card h3 {
+            color: #64748b;
+            font-size: 16px;
+        }
+
+        .value {
+            font-size: 38px;
+            font-weight: bold;
+            margin-top: 15px;
+        }
+
+        .temperature {
+            color: #2563eb;
+        }
+
+        .humidity {
+            color: #059669;
+        }
+
+        .chart-card {
+            background: white;
+            padding: 25px;
+            margin-top: 25px;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px #0000000d;
+        }
+
+        .chart-card h2 {
+            margin-bottom: 20px;
+            font-size: 19px;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 280px;
+        }
+
+        footer {
+            text-align: center;
+            padding: 30px;
+            color: #64748b;
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <h1>IoT Environment Monitor</h1>
+    <p>ESP8266 NodeMCU + DHT11 + ThingSpeak Cloud</p>
+</header>
+
+<div class="container">
+
+    <div class="status">
+        <span id="deviceStatus">Checking cloud data...</span>
+        <span id="lastUpdated">Last updated: --</span>
+    </div>
+
+    <div class="cards">
+
+        <div class="card">
+            <h3>Temperature</h3>
+            <div class="value temperature" id="temperature">
+                -- °C
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Humidity</h3>
+            <div class="value humidity" id="humidity">
+                -- %
+            </div>
+        </div>
+
+    </div>
+
+    <div class="chart-card">
+        <h2>Temperature History</h2>
+        <div class="chart-container">
+            <canvas id="temperatureChart"></canvas>
+        </div>
+    </div>
+
+    <div class="chart-card">
+        <h2>Humidity History</h2>
+        <div class="chart-container">
+            <canvas id="humidityChart"></canvas>
+        </div>
+    </div>
+
+</div>
+
+<footer>
+    ESP8266 IoT Monitoring System | Powered by ThingSpeak
+</footer>
+
+<script>
+
+// ======================================
+// THINGSPEAK CONFIGURATION
+// ======================================
+
+const CHANNEL_ID = "3560656";
+
+const API_URL =
+    `https://api.thingspeak.com/channels/${CHANNEL_ID}/feeds.json?results=20`;
+
+// ======================================
+// CHART CONFIGURATION
+// ======================================
+
+const temperatureChart = new Chart(
+    document.getElementById("temperatureChart"),
+    {
+        type: "line",
+        data: {
+            labels: [],
+            datasets: [{
+                label: "Temperature (°C)",
+                data: [],
+                borderColor: "#2563eb",
+                backgroundColor: "rgba(37,99,235,0.1)",
+                fill: true,
+                tension: 0.3
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false
+        }
+    }
+);
+
+const humidityChart = new Chart(
+    document.getElementById("humidityChart"),
+    {
+        type: "line",
+        data: {
+            labels: [],
+            datasets: [{
+                label: "Humidity (%)",
+                data: [],
+                borderColor: "#059669",
+                backgroundColor: "rgba(5,150,105,0.1)",
+                fill: true,
+                tension: 0.3
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false
+        }
+    }
+);
+
+// ======================================
+// FETCH THINGSPEAK DATA
+// ======================================
+
+async function fetchData() {
+
+    const status = document.getElementById("deviceStatus");
+
+    try {
+
+        const response = await fetch(API_URL);
+
+        if (!response.ok) {
+            throw new Error("HTTP " + response.status);
+        }
+
+        const result = await response.json();
+
+        const feeds = result.feeds || [];
+
+        const validFeeds = feeds.filter(feed =>
+            feed.field1 !== null &&
+            feed.field2 !== null &&
+            Number.isFinite(Number(feed.field1)) &&
+            Number.isFinite(Number(feed.field2))
+        );
+
+        if (validFeeds.length === 0) {
+            throw new Error("No valid sensor data");
+        }
+
+        const latest = validFeeds[validFeeds.length - 1];
+
+        const temperature = Number(latest.field1);
+        const humidity = Number(latest.field2);
+
+        // Current readings
+
+        document.getElementById("temperature").textContent =
+            temperature.toFixed(1) + " °C";
+
+        document.getElementById("humidity").textContent =
+            humidity.toFixed(1) + " %";
+
+        // Timestamp and data freshness
+
+        const timestamp = new Date(latest.created_at);
+        const age = Date.now() - timestamp.getTime();
+
+        const isOnline = age >= 0 && age < 60000;
+
+        status.textContent = isOnline
+            ? "● Device data is recent"
+            : "● No recent sensor data";
+
+        status.className = isOnline ? "online" : "offline";
+
+        document.getElementById("lastUpdated").textContent =
+            "Last updated: " + timestamp.toLocaleString();
+
+        // Historical graph data
+
+        const labels = validFeeds.map(feed =>
+            new Date(feed.created_at).toLocaleTimeString()
+        );
+
+        const temperatures = validFeeds.map(feed =>
+            Number(feed.field1)
+        );
+
+        const humidities = validFeeds.map(feed =>
+            Number(feed.field2)
+        );
+
+        temperatureChart.data.labels = labels;
+        temperatureChart.data.datasets[0].data = temperatures;
+        temperatureChart.update();
+
+        humidityChart.data.labels = labels;
+        humidityChart.data.datasets[0].data = humidities;
+        humidityChart.update();
+
+    }
+    catch (error) {
+
+        console.error("ThingSpeak error:", error);
+
+        status.textContent = "● Cloud connection error";
+        status.className = "offline";
+    }
+}
+
+// Initial data fetch
+fetchData();
+
+// Refresh every 20 seconds
+setInterval(fetchData, 20000);
+
+</script>
+
+</body>
+</html>
